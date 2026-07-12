@@ -1,4 +1,4 @@
-# Postop WhatsApp — Seguimiento postoperatorio veterinario (Anicura Lleida)
+# Postop WhatsApp — Seguimiento postoperatorio veterinario 
 
 Sistema de seguimiento postoperatorio por WhatsApp construido con **n8n + Supabase + Claude (Anthropic)**.
 Un propietario cuya mascota ha sido operada recibe/mantiene una conversación de check-in por WhatsApp;
