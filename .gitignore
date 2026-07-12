@@ -12,3 +12,6 @@ credentials/
 node_modules/
 .idea/
 .vscode/
+
+# Documento de contexto privado para el proyecto de Claude (IDs operativos)
+CONTEXTO-PROYECTO-CLAUDE.md
