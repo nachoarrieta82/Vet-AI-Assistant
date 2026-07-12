@@ -1,0 +1,43 @@
+{
+  "name": "Postop — Activación",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "provet-discharge", "options": {} },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "id": "33e614bb-d08c-4330-8638-21dd4c9d1d1b",
+      "name": "Webhook",
+      "webhookId": "fdd53447-7abf-4713-bf11-b1614598aa0d"
+    },
+    {
+      "parameters": { "jsCode": "// Normaliza a formato +E.164 (por defecto Espana, +34). Debe coincidir con la logica del bridge de entrada.\nfunction normalizePhone(raw, defaultCC = '34') {\n  if (raw === undefined || raw === null) return null;\n  const hasPlus = String(raw).trim().startsWith('+');\n  const d = String(raw).replace(/\\D/g, '');\n  if (!d) return null;\n  if (hasPlus) return '+' + d;\n  if (d.startsWith('00')) return '+' + d.slice(2);\n  if (d.length === 9 && /^[6-9]/.test(d)) return '+' + defaultCC + d;\n  return '+' + d;\n}\n\nconst input = $input.first().json.body;\n\nreturn [\n  {\n    json: {\n      provet_consultation_id: input.consultation_id,\n      provet_patient_id: input.patient_id,\n      provet_client_id: input.client_id,\n      patient_name: input.patient_name,\n      species: input.species,\n      breed: input.breed,\n      weight_kg: input.weight_kg,\n      owner_name: input.owner_name,\n      owner_phone: normalizePhone(input.owner_phone),\n      owner_language: input.owner_language || 'es',\n      surgery_type_raw: input.surgery_type,\n      surgery_date: input.surgery_date,\n      discharge_date: input.discharge_date,\n      discharge_instructions: input.discharge_instructions,\n      medications: JSON.stringify(input.medications || []),\n      vet_name: input.vet_name,\n      total_check_in_days: input.follow_up_days || 7,\n      check_ins_per_day: 1,\n      current_day: 0,\n      status: 'active',\n      last_risk_level: 'green',\n      yellow_count: 0,\n      red_count: 0\n    }\n  }\n];" },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [208, 0],
+      "id": "54786fbb-18fb-412a-a964-2f5892f3b956",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": { "tableId": "follow_ups", "dataToSend": "autoMapInputData" },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [416, 0],
+      "id": "88393f7b-b013-41c7-9900-0d3187ebc15d",
+      "name": "Create a row"
+    },
+    {
+      "parameters": { "content": "## Normalizacion de telefono (+E.164)\n`normalizePhone(raw, defaultCC = '34')` en 'Code in JavaScript' -- mismo codigo en el bridge 'WhatsApp Inbound (Meta) / Normalizar mensaje'. Mantener ambos sincronizados para que el numero guardado en follow_ups.owner_phone coincida con el de la busqueda.\n\n**Cambio futuro (multi-pais):** la regla '9 digitos que empiezan por 6-9 -> +34' es especifica de Espana. Para otros paises, ajustar defaultCC o la regla nacional en AMBOS nodos.", "width": 420, "height": 240, "color": 5 },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [120, -260],
+      "id": "ab4dc1e7-0000-0000-0000-activacionnote",
+      "name": "Nota: formato de teléfono"
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Code in JavaScript", "type": "main", "index": 0 }]] },
+    "Code in JavaScript": { "main": [[{ "node": "Create a row", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

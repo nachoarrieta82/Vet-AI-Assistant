@@ -1,0 +1,14 @@
+# Nunca subir secretos ni entornos locales
+.env
+.env.*
+*.local
+secrets/
+credentials/
+*.key
+*.pem
+
+# SO / editor
+.DS_Store
+node_modules/
+.idea/
+.vscode/

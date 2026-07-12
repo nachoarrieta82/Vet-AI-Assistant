@@ -1,0 +1,86 @@
+{
+  "name": "Postop — WhatsApp Inbound (Meta)",
+  "nodes": [
+    {
+      "parameters": { "multipleMethods": true, "path": "whatsapp-meta", "responseMode": "responseNode", "options": {} },
+      "id": "095948bc-54e8-4e52-9f4f-536916b40b26",
+      "name": "Meta Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "53e6cc22-4d90-4267-8878-dbf3f37f31fe"
+    },
+    {
+      "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [ { "leftValue": "={{ $json.query[\"hub.mode\"] }}", "rightValue": "subscribe", "operator": { "type": "string", "operation": "equals" } } ], "combinator": "and" }, "options": {} },
+      "id": "ebf4a92d-b92a-4604-a58b-a657cbbf7992",
+      "name": "Handshake de verificacion?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [224, 0]
+    },
+    {
+      "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [ { "leftValue": "={{ $json.query[\"hub.verify_token\"] }}", "rightValue": "YOUR_META_VERIFY_TOKEN", "operator": { "type": "string", "operation": "equals" } } ], "combinator": "and" }, "options": {} },
+      "id": "897d2a65-1c04-4bfa-82ad-3a26b13c633a",
+      "name": "Token correcto?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [448, -128]
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "={{ $json.query[\"hub.challenge\"] }}", "options": { "responseCode": 200 } },
+      "id": "c51a808f-de04-4868-bb60-d4b6e5684af3",
+      "name": "Responder challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1104, -240]
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "Forbidden", "options": { "responseCode": 403 } },
+      "id": "6b2d21d4-5e0b-43c3-8c47-f5071d41988c",
+      "name": "Responder 403",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [1104, -16]
+    },
+    {
+      "parameters": { "respondWith": "text", "responseBody": "EVENT_RECEIVED", "options": { "responseCode": 200 } },
+      "id": "2845fa24-3c5d-4616-adf2-a2f414b1f984",
+      "name": "ACK a Meta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [448, 144]
+    },
+    {
+      "parameters": { "jsCode": "// Normaliza a formato +E.164 (por defecto Espana, +34). Debe coincidir con la logica de 'Activacion'.\nfunction normalizePhone(raw, defaultCC = '34') {\n  if (raw === undefined || raw === null) return null;\n  const hasPlus = String(raw).trim().startsWith('+');\n  const d = String(raw).replace(/\\D/g, '');\n  if (!d) return null;\n  if (hasPlus) return '+' + d;\n  if (d.startsWith('00')) return '+' + d.slice(2);\n  if (d.length === 9 && /^[6-9]/.test(d)) return '+' + defaultCC + d;\n  return '+' + d;\n}\n\nconst body = $input.first().json.body || {};\nconst value = ((((body.entry || [])[0] || {}).changes || [])[0] || {}).value || {};\nconst msg = (value.messages || [])[0];\nif (!msg) { return []; }                       // callback de estado (delivered/read) u otro -> ignorar\nif (msg.type !== 'text' || !msg.text) { return []; } // no-texto -> ignorar\nconst owner_phone = normalizePhone(msg.from);\nif (!owner_phone) { return []; }\nreturn [{ json: { owner_phone, message: msg.text.body } }];" },
+      "id": "8917e61a-efce-401e-9d9a-8e9c90cfa012",
+      "name": "Normalizar mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [672, 144]
+    },
+    {
+      "parameters": { "method": "POST", "url": "https://YOUR_N8N_HOST/webhook/whatsapp-inbound", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ owner_phone: $json.owner_phone, message: $json.message }) }}", "options": {} },
+      "id": "93fae3d6-6c17-4558-8e5e-f6b3fb348b25",
+      "name": "Reenviar a Conversacion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [880, 144]
+    },
+    {
+      "parameters": { "content": "## Normalizacion de telefono (+E.164)\n`normalizePhone(raw, defaultCC = '34')` -- mismo codigo en 'Activacion / Code in JavaScript'. Mantener ambos sincronizados.\n\n**Cambio futuro (multi-pais):** la regla '9 digitos que empiezan por 6-9 -> +34' es especifica de Espana. Ajustar defaultCC o la regla nacional en AMBOS nodos.\n\nNOTA: el webhook usa 'multipleMethods' -> tiene una salida por metodo (0=GET, 1=POST). Ambas salidas se conectan a 'Handshake de verificacion?' que enruta por contenido.", "width": 460, "height": 280, "color": 5 },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [352, -420],
+      "id": "ab4dc1e7-0000-0000-0000-bridgenote01",
+      "name": "Nota: formato de teléfono"
+    }
+  ],
+  "connections": {
+    "Meta Webhook": { "main": [[{ "node": "Handshake de verificacion?", "type": "main", "index": 0 }], [{ "node": "Handshake de verificacion?", "type": "main", "index": 0 }]] },
+    "Handshake de verificacion?": { "main": [[{ "node": "Token correcto?", "type": "main", "index": 0 }], [{ "node": "ACK a Meta", "type": "main", "index": 0 }]] },
+    "Token correcto?": { "main": [[{ "node": "Responder challenge", "type": "main", "index": 0 }], [{ "node": "Responder 403", "type": "main", "index": 0 }]] },
+    "ACK a Meta": { "main": [[{ "node": "Normalizar mensaje", "type": "main", "index": 0 }]] },
+    "Normalizar mensaje": { "main": [[{ "node": "Reenviar a Conversacion", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

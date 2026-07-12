@@ -1,0 +1,145 @@
+{
+  "name": "Postop — Conversación",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "whatsapp-inbound", "options": {} },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-144, -144],
+      "id": "a0f491f9-7e79-4460-8728-f8eca40d6d13",
+      "name": "Webhook",
+      "webhookId": "c9e802e6-04db-4764-9eaf-436f4a4a9317"
+    },
+    {
+      "parameters": { "operation": "getAll", "tableId": "follow_ups", "matchType": "allFilters", "filters": { "conditions": [ { "keyName": "owner_phone", "condition": "eq", "keyValue": "={{  $json.body.owner_phone }}" }, { "keyName": "status", "condition": "eq", "keyValue": "active" } ] } },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [64, -96],
+      "id": "0910a0ee-1a18-4dad-88d8-3a00612db1a5",
+      "name": "Get many rows"
+    },
+    {
+      "parameters": { "operation": "getAll", "tableId": "messages", "filters": { "conditions": [ { "keyName": "check_in_id", "condition": "eq", "keyValue": "={{ $json.id }}" } ] } },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [480, -32],
+      "id": "7ee8d428-df8c-40b8-9e97-499ba3c9e6aa",
+      "name": "Historial de mensajes",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": { "jsCode": "const followUp = $('Get many rows').first().json;\nconst checkIn = $('Buscar o crear check-in').first().json;\nconst messagesRaw = $('Historial de mensajes').all();\n\nconst conversationHistory = messagesRaw\n  .filter(m => m.json && m.json.id && m.json.content)\n  .map(m => ({\n    role: m.json.sender === 'owner' ? 'user' : 'assistant',\n    content: m.json.content\n  }));\n\nconst surgeryDate = new Date(followUp.surgery_date);\nconst now = new Date();\nconst recoveryDay = Math.ceil((now - surgeryDate) / (1000 * 60 * 60 * 24));\n\nconst meds = typeof followUp.medications === 'string'\n  ? JSON.parse(followUp.medications)\n  : (followUp.medications || []);\n\nconst medsText = meds\n  .map(m => `- ${m.name} ${m.dose || ''}, ${m.frequency || ''}. ${m.instructions || ''}${m.duration ? ' (' + m.duration + ')' : ''}`.trim())\n  .join('\\n');\n\nconst dynamicContext = [\n  '## PACIENTE',\n  `- Nombre: ${followUp.patient_name}`,\n  `- Especie: ${followUp.species}`,\n  `- Raza: ${followUp.breed || 'No especificada'}`,\n  `- Peso: ${followUp.weight_kg} kg`,\n  '',\n  '## CIRUGIA',\n  `- Tipo: ${followUp.surgery_type_raw}`,\n  `- Fecha: ${followUp.surgery_date}`,\n  `- Veterinario: ${followUp.vet_name}`,\n  `- Dia de recuperacion: ${recoveryDay} de ${followUp.total_check_in_days}`,\n  '',\n  '## MEDICACION PRESCRITA',\n  medsText,\n  '',\n  '## INSTRUCCIONES DE ALTA',\n  followUp.discharge_instructions\n].join('\\n');\n\nreturn [{\n  json: {\n    dynamic_context: dynamicContext,\n    conversation_history: conversationHistory,\n    owner_message: $('Webhook').first().json.body.message,\n    check_in_id: checkIn.id,\n    follow_up_id: followUp.id,\n    is_new_check_in: checkIn.is_new\n  }\n}];" },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, -32],
+      "id": "875c2e52-b649-49df-b2f2-f7eeed8f6d7d",
+      "name": "Construir prompt"
+    },
+    {
+      "parameters": { "jsCode": "const followUp = $('Get many rows').first().json;\nconst supabaseUrl = 'https://YOUR_SUPABASE_PROJECT.supabase.co';\nconst supabaseKey = $vars.SUPABASE_SERVICE_ROLE_KEY;\n\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`,\n  'Content-Type': 'application/json',\n  'Prefer': 'return=representation'\n};\n\nconst existing = await this.helpers.httpRequest({\n  method: 'GET',\n  url: `${supabaseUrl}/rest/v1/check_ins?follow_up_id=eq.${followUp.id}&status=eq.in_progress&limit=1`,\n  headers,\n  json: true\n});\n\nif (existing.length > 0) {\n  return [{ json: { ...existing[0], is_new: false } }];\n}\n\nconst newDay = followUp.current_day + 1;\nconst created = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `${supabaseUrl}/rest/v1/check_ins`,\n  headers,\n  body: {\n    follow_up_id: followUp.id,\n    day_number: newDay,\n    status: 'in_progress',\n    started_at: new Date().toISOString()\n  },\n  json: true\n});\n\nreturn [{ json: { ...created[0], is_new: true } }];" },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [272, -96],
+      "id": "f76e143d-7607-4742-b121-579c6b77a7f3",
+      "name": "Buscar o crear check-in"
+    },
+    {
+      "parameters": { "jsCode": "const data = $input.first().json;\n\nconst messages = (data.conversation_history || []).concat([\n  { role: 'user', content: data.owner_message }\n]);\n\nconst body = {\n  model: 'claude-haiku-4-5-20251001',\n  max_tokens: 1024,\n  system: [\n    { type: 'text', text: data.system_prompt_base, cache_control: { type: 'ephemeral' } },\n    { type: 'text', text: data.dynamic_context }\n  ],\n  messages: messages\n};\n\nreturn [{\n  json: {\n    body: body,\n    check_in_id: data.check_in_id,\n    follow_up_id: data.follow_up_id,\n    is_new_check_in: data.is_new_check_in\n  }\n}];" },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1072, -32],
+      "id": "8dc09ddd-679f-4dc5-b2bb-b1694e0dbbd4",
+      "name": "Construir body Claude"
+    },
+    {
+      "parameters": { "method": "POST", "url": "https://api.anthropic.com/v1/messages", "sendHeaders": true, "headerParameters": { "parameters": [ { "name": "x-api-key", "value": "={{ $vars.Anthropic_API_key }}" }, { "name": "anthropic-version", "value": "2023-06-01" }, { "name": "Content-Type", "value": "application/json" } ] }, "sendBody": true, "specifyBody": "json", "jsonBody": "={{  JSON.stringify($json.body) }}", "options": {} },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1264, -32],
+      "id": "96534c6a-6e45-4db6-a7fe-d48cc6f6037b",
+      "name": "HTTP Request"
+    },
+    {
+      "id": "4b2c8ee9-b174-424b-90c1-e09f17caf493",
+      "name": "Prompt base",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [880, -32],
+      "parameters": { "mode": "manual", "includeOtherFields": true, "include": "all", "assignments": { "assignments": [ { "id": "sysprompt-base-1", "name": "system_prompt_base", "type": "string", "value": "Eres un asistente de seguimiento postoperatorio veterinario del equipo de **Anicura Lleida**. Realizas check-ins con propietarios de mascotas operadas recientemente.\n\n## IDIOMA\n- El propietario puede escribir en espanol o en catalan.\n- Responde SIEMPRE en el mismo idioma en que escribe el propietario: si escribe en catalan, responde y continua en catalan; si escribe en espanol, en espanol.\n- Manten el idioma de forma consistente durante toda la conversacion; si el propietario cambia de idioma, cambialo tu tambien. Ante la duda en el primer mensaje, usa espanol.\n\n## PROTOCOLO\nFlujo (1 pregunta/mensaje, esperar respuesta):\n1. Saludo + dia de recuperacion\n2. Como ha pasado [mascota] el dia/la noche?\n3. Ha comido y bebido con normalidad?\n4. Zona quirurgica: enrojecimiento, hinchazon, secrecion, estado de puntos?\n5. Nivel de actividad/movilidad?\n6. Se han dado todas las dosis de medicacion?\n7. Cierre: resumen, instrucciones, confirmar proximo check-in\n\n## REGLAS\n- Tono empatico, claro, tranquilizador. Sin jerga innecesaria.\n- UNA pregunta por mensaje. Esperar respuesta antes de continuar.\n- Si respuesta ambigua, reformular con opciones concretas.\n- NUNCA diagnosticar ni modificar tratamiento.\n- NUNCA minimizar sintomas de alerta.\n- Cuando sea natural, identificate como parte del equipo de Anicura Lleida.\n\n## EVALUACION DE RIESGO\nClasificar internamente:\n- VERDE: esperado para el dia postoperatorio actual\n- AMARILLO: vigilancia reforzada (2+ = alerta amarilla)\n- ROJO: escalada inmediata - dejar de preguntar\n\nSenales ROJAS: secrecion verdosa/maloliente, dehiscencia de puntos, vomitos >2x, letargia severa, sangrado activo, fiebre reportada, dificultad respiratoria.\n\nSi ROJO: NO tranquilizar, indicar que el equipo veterinario de Anicura Lleida sera contactado, prefijo [ALERTA:ROJO]\nSi 2+ AMARILLO: recomendar vigilancia aumentada, prefijo [ALERTA:AMARILLO]\nAl completar: [CHECK-IN:COMPLETO] + JSON {\"risk_level\":\"green|yellow|red\",\"summary\":\"...\",\"symptoms\":[]}\n\n## MARCADORES DE CONTROL\nLos marcadores [ALERTA:ROJO], [ALERTA:AMARILLO] y [CHECK-IN:COMPLETO] son etiquetas de control internas: escribelos SIEMPRE exactamente asi (en este formato literal en espanol), aunque la conversacion sea en catalan. El JSON de cierre tambien en este formato exacto." } ] }, "options": {} },
+      "notes": "Prompt de sistema ESTATICO. Se cachea con cache_control en 'Construir body Claude'."
+    },
+    {
+      "id": "953c3151-3d4b-46cd-938d-804a25631a7f",
+      "name": "Parse respuesta Claude",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1456, -32],
+      "parameters": { "jsCode": "// La respuesta de Anthropic llega directa en $json (HTTP Request sin 'full response').\nconst resp = $input.first().json;\nconst payload = resp && resp.content ? resp : ((resp && resp.data) ? resp.data : resp);\n\nlet text = '';\nif (payload && Array.isArray(payload.content)) {\n  text = payload.content.filter(b => b.type === 'text').map(b => b.text).join('\\n');\n}\n\nconst meta = $('Construir body Claude').first().json;\nconst webhook = $('Webhook').first().json.body;\n\nlet alert_type = null;\nif (text.startsWith('[ALERTA:ROJO]')) alert_type = 'red';\nelse if (text.startsWith('[ALERTA:AMARILLO]')) alert_type = 'yellow';\n\nlet is_complete = false;\nlet risk_level = null;\nlet summary = null;\nlet symptoms = [];\n\nconst marker = '[CHECK-IN:COMPLETO]';\nconst idx = text.indexOf(marker);\nif (idx !== -1) {\n  is_complete = true;\n  const after = text.slice(idx + marker.length);\n  const jsonMatch = after.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    try {\n      const parsed = JSON.parse(jsonMatch[0]);\n      risk_level = parsed.risk_level || null;\n      summary = parsed.summary || null;\n      symptoms = parsed.symptoms || [];\n    } catch (e) { /* deja los valores por defecto */ }\n  }\n}\n\nlet response_text = text\n  .replace(/^\\[ALERTA:(ROJO|AMARILLO)\\]\\s*/, '')\n  .replace(/\\[CHECK-IN:COMPLETO\\][\\s\\S]*$/, '')\n  .trim();\n\n// Markdown -> formato WhatsApp: **negrita** -> *negrita*; encabezados # -> *texto*.\nresponse_text = response_text\n  .replace(/\\*\\*(.+?)\\*\\*/g, '*$1*')\n  .replace(/__(.+?)__/g, '*$1*')\n  .replace(/^#{1,6}\\s*(.+)$/gm, '*$1*')\n  .trim();\n\nif (!risk_level && alert_type) risk_level = alert_type;\n\nreturn [{\n  json: {\n    response_text,\n    raw_text: text,\n    is_complete,\n    risk_level,\n    summary,\n    symptoms,\n    alert_type,\n    check_in_id: meta.check_in_id,\n    follow_up_id: meta.follow_up_id,\n    owner_phone: webhook.owner_phone,\n    owner_message: webhook.message\n  }\n}];" }
+    },
+    {
+      "id": "0967e414-29c1-4df6-9bc2-569f37b69985",
+      "name": "Guardar mensajes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1648, -32],
+      "parameters": { "jsCode": "const d = $input.first().json;\nconst supabaseUrl = 'https://YOUR_SUPABASE_PROJECT.supabase.co';\nconst supabaseKey = $vars.SUPABASE_SERVICE_ROLE_KEY;\n\nconst headers = {\n  'apikey': supabaseKey,\n  'Authorization': `Bearer ${supabaseKey}`,\n  'Content-Type': 'application/json',\n  'Prefer': 'return=representation'\n};\n\n// Tabla messages (NOT NULL: check_in_id, direction, sender, content).\n// CHECK: direction in {inbound, outbound}; sender in {owner, system}. 'system' se lee como 'assistant'.\nconst inserted = await this.helpers.httpRequest({\n  method: 'POST',\n  url: `${supabaseUrl}/rest/v1/messages`,\n  headers,\n  body: [\n    { check_in_id: d.check_in_id, direction: 'inbound',  sender: 'owner',  content: d.owner_message, message_type: 'text' },\n    { check_in_id: d.check_in_id, direction: 'outbound', sender: 'system', content: d.response_text, message_type: 'text' }\n  ],\n  json: true\n});\n\nlet check_in_updated = false;\nlet update_error = null;\nif (d.is_complete) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: `${supabaseUrl}/rest/v1/check_ins?id=eq.${d.check_in_id}`,\n      headers,\n      body: {\n        status: 'completed',\n        risk_level: d.risk_level || 'green',\n        risk_summary: d.summary,\n        symptoms: d.symptoms,\n        completed_at: new Date().toISOString()\n      },\n      json: true\n    });\n    check_in_updated = true;\n  } catch (e) {\n    update_error = e.message || String(e);\n  }\n}\n\nreturn [{\n  json: {\n    ...d,\n    messages_saved: Array.isArray(inserted) ? inserted.length : 0,\n    check_in_updated,\n    update_error\n  }\n}];" }
+    },
+    {
+      "id": "e84326b7-dd02-4534-b363-03bdfefb72f4",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1840, -32],
+      "parameters": { "method": "POST", "url": "=https://graph.facebook.com/v21.0/{{ $vars.WA_PHONE_NUMBER_ID }}/messages", "sendHeaders": true, "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $vars.WA_ACCESS_TOKEN }}" }, { "name": "Content-Type", "value": "application/json" } ] }, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $json.owner_phone, type: 'text', text: { body: $json.response_text } }) }}", "options": {} }
+    },
+    {
+      "id": "6042bb68-398b-4cb0-8ee5-5e29c35c7519",
+      "name": "¿Check-in completo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1648, 200],
+      "parameters": { "conditions": { "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2 }, "conditions": [ { "leftValue": "={{ $json.is_complete }}", "rightValue": "", "operator": { "type": "boolean", "operation": "true", "singleValue": true } } ], "combinator": "and" } }
+    },
+    {
+      "id": "6565697b-f4fa-4271-922d-ab7f33e62b54",
+      "name": "Construir aviso equipo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1856, 200],
+      "parameters": { "jsCode": "const d = $input.first().json;\nconst fu = $('Get many rows').first().json;\n\nconst surgeryDate = new Date(fu.surgery_date);\nconst now = new Date();\nconst recoveryDay = Math.ceil((now - surgeryDate) / (1000 * 60 * 60 * 24));\n\nconst riskMap = { green: 'VERDE', yellow: 'AMARILLO', red: 'ROJO' };\nconst risk = riskMap[d.risk_level] || (d.risk_level || 'n/d');\nconst symptoms = Array.isArray(d.symptoms) ? d.symptoms.join(', ') : (d.symptoms || '');\nconst summary = d.summary || 'Sin resumen';\n\nconst email_subject = `[Anicura Lleida] Check-in completado - ${fu.patient_name} (riesgo ${risk})`;\nconst email_text = [\n  'Check-in postoperatorio COMPLETADO - Anicura Lleida',\n  '',\n  `Paciente: ${fu.patient_name} (${fu.species}${fu.breed ? ', ' + fu.breed : ''}, ${fu.weight_kg} kg)`,\n  `Propietario: ${fu.owner_name} - ${d.owner_phone}`,\n  `Cirugia: ${fu.surgery_type_raw} - ${fu.vet_name}`,\n  `Dia de recuperacion: ${recoveryDay} de ${fu.total_check_in_days}`,\n  '',\n  `Nivel de riesgo: ${risk}`,\n  `Resumen clinico: ${summary}`,\n  `Sintomas destacados: ${symptoms || 'ninguno'}`,\n  '',\n  `check_in_id: ${d.check_in_id}`\n].join('\\n');\n\nconst wa_params = [fu.patient_name, risk, summary, `${fu.owner_name} (${d.owner_phone})`];\nconst oncall_template = {\n  name: 'checkin_completado',\n  language: { code: 'es' },\n  components: [ { type: 'body', parameters: wa_params.map(t => ({ type: 'text', text: String(t) })) } ]\n};\n\nreturn [{ json: { ...d, email_subject, email_text, oncall_template } }];" }
+    },
+    {
+      "id": "47b98bae-d5f9-4896-ab0a-6b7711b8fa3e",
+      "name": "Aviso email clínica",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2072, 120],
+      "parameters": { "operation": "send", "fromEmail": "={{ $vars.CLINIC_EMAIL }}", "toEmail": "={{ $vars.CLINIC_EMAIL }}", "subject": "={{ $json.email_subject }}", "emailFormat": "text", "text": "={{ $json.email_text }}", "options": { "appendAttribution": false } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "716be090-6fb5-448c-8056-9fed2eab39aa",
+      "name": "Aviso WhatsApp guardia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [2072, 300],
+      "parameters": { "method": "POST", "url": "=https://graph.facebook.com/v21.0/{{ $vars.WA_PHONE_NUMBER_ID }}/messages", "sendHeaders": true, "headerParameters": { "parameters": [ { "name": "Authorization", "value": "=Bearer {{ $vars.WA_ACCESS_TOKEN }}" }, { "name": "Content-Type", "value": "application/json" } ] }, "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: $vars.ONCALL_WA_PHONE, type: 'template', template: $json.oncall_template }) }}", "options": {} },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Get many rows", "type": "main", "index": 0 }]] },
+    "Get many rows": { "main": [[{ "node": "Buscar o crear check-in", "type": "main", "index": 0 }]] },
+    "Historial de mensajes": { "main": [[{ "node": "Construir prompt", "type": "main", "index": 0 }]] },
+    "Buscar o crear check-in": { "main": [[{ "node": "Historial de mensajes", "type": "main", "index": 0 }]] },
+    "Construir body Claude": { "main": [[{ "node": "HTTP Request", "type": "main", "index": 0 }]] },
+    "Construir prompt": { "main": [[{ "node": "Prompt base", "type": "main", "index": 0 }]] },
+    "Prompt base": { "main": [[{ "node": "Construir body Claude", "type": "main", "index": 0 }]] },
+    "HTTP Request": { "main": [[{ "node": "Parse respuesta Claude", "type": "main", "index": 0 }]] },
+    "Parse respuesta Claude": { "main": [[{ "node": "Guardar mensajes", "type": "main", "index": 0 }]] },
+    "Guardar mensajes": { "main": [[{ "node": "Enviar WhatsApp", "type": "main", "index": 0 }, { "node": "¿Check-in completo?", "type": "main", "index": 0 }]] },
+    "¿Check-in completo?": { "main": [[{ "node": "Construir aviso equipo", "type": "main", "index": 0 }]] },
+    "Construir aviso equipo": { "main": [[{ "node": "Aviso email clínica", "type": "main", "index": 0 }, { "node": "Aviso WhatsApp guardia", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
